@@ -1,0 +1,55 @@
+# * Copyright © 2026 Devin B. Royal. * All Rights Reserved. | Status: Active Engineering.
+
+name: Sovereign-Link Validator Pipeline
+
+on:
+  push:
+    branches: [ "main", "release/*" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  secure-build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+
+    - name: Build Aura-7 Engine (Aura7Engine.java)
+      run: make build
+
+    - name: Initialize Podman Environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y podman
+
+    - name: Build Hardened Container Image
+      run: make image
+
+    - name: Cryptographic Attestation (Signing)
+      env:
+        SOVEREIGN_PRIVATE_KEY: ${{ secrets.SOVEREIGN_PRIVATE_KEY }}
+      run: |
+        echo "$SOVEREIGN_PRIVATE_KEY" > sovereign_key
+        chmod 600 sovereign_key
+        # Sign the build artifact to ensure zero-knowledge integrity
+        sha256sum build/sovereign-core.jar > checksum.txt
+        ssh-keygen -Y sign -f sovereign_key -n file checksum.txt
+        rm sovereign_key
+
+    - name: Push to Sovereign Registry
+      if: github.event_name != 'pull_request'
+      run: |
+        # Use Podman to push to your private, hardened registry
+        echo "${{ secrets.REGISTRY_PASSWORD }}" | podman login -u "${{ secrets.REGISTRY_USER }}" --password-stdin quay.io
+        podman push royal/sovereign-core:latest
+
+    - name: Cleanup
+      run: make clean
